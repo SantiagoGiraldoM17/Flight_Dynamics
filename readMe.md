@@ -10,7 +10,7 @@ This repository contains our group's programming assignments, simulations, and m
 ## Repository Structure
 As the course progresses, new modules and assignments will be added to their respective folders:
 
-* [cite_start]**`/Task_1`** - A software tool to transform and visualize vectors across different coordinate frames.
+* **`/Task_1`** - A software tool to transform and visualize vectors across different coordinate frames.
 * **`/Task_2_Placeholder`** - Future assignments will go here.
 
 ## Core Technologies
