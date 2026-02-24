@@ -7,7 +7,7 @@ import matplotlib.transforms as mtransforms
 from matplotlib.patches import Circle
 
 # Import the math engine
-from dcm import transform_flight_data, compute_aero_angles, build_dcm
+from flight_math import transform_flight_data, compute_aero_angles, build_dcm
 
 class FlightDataViewer:
     def __init__(self, root, euler_in, v_body_in):
