@@ -84,9 +84,24 @@ def compute_aero_angles(euler_vector, v_body):
     theta_rad = np.radians(theta)  
     gamma_rad = theta_rad - alpha_rad
     
-    # Convert radians to degrees for output
-    alpha = np.degrees(alpha_rad)
-    beta = np.degrees(beta_rad)
-    gamma = np.degrees(gamma_rad)
+    # Package the angles into a vector and convert to degrees
+    aero_angles = np.degrees([alpha_rad, beta_rad, gamma_rad])
     
-    return alpha, beta, gamma
+    return aero_angles
+
+def aircraft_state(v_body, v_ned, euler, angular_rates, aero_angles, degrees=True):
+    """
+    Returns aircraft state values in the structured dictionary format 
+    required by the assignment.
+    """
+    
+    # 1. Build the exact dictionary structure the assignment requests
+    state_values = {
+        "angles": np.array(aero_angles),           # [alpha, beta, gamma] in degrees
+        "velocities_body": np.array(v_body),     # [u, v, w] in body frame [m/s]
+        "velocities_ned": np.array(v_ned),          # [V_N, V_E, V_D] in NED frame [m/s]
+        "angular_rates": np.array(angular_rates),       # [p, q, r] roll, pitch, yaw rates [rad/s]
+        "attitude": np.array(euler)     # [phi, theta, psi] Euler angles
+    }
+    
+    return state_values

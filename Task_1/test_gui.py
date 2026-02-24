@@ -1,12 +1,12 @@
 import tkinter as tk
 from flight_gui import FlightDataViewer
-
+from dcm import transform_flight_data, compute_aero_angles, aircraft_state
 
 # Your exact 3 test cases
 cases = [
     {"name": "Case A: Straight-and-level",  "euler": [0.0, 0.0, 45.0],  "v_body": [100.0, 0.0, 0.0]},
     {"name": "Case B: Climb",               "euler": [0.0, 15.0, 0.0],  "v_body": [100.0, 0.0, 0.0]},
-    {"name": "Case C: Climbing Right Turn", "euler": [30.0, 5.0, 90.0], "v_body": [100.0, 5.0, 8.0]}
+    {"name": "Case C: Climbing Right Turn", "euler": [30.0, 5.0, 110.0], "v_body": [100.0, 5.0, 20.0]}
 ]
 
 current_case_idx = 0
@@ -21,9 +21,26 @@ def show_next_case(event=None):
     print(f">>> Switched to {current_state['name']} <<<")
     print(f"{'='*40}")
     
-    # Push the exact arrays into your GUI
-    app.update_state(current_state["euler"], current_state["v_body"])
-
+    v_body = current_state["v_body"]
+    euler = current_state["euler"]
+    angular_rates = [0.0, 0.0, 0.0] # Test cases don't provide p, q, r
+    
+    # 1. Update the GUI
+    app.update_state(euler, v_body)
+    
+    # 2. Do the math here in the test script
+    v_ned, _ = transform_flight_data(euler, v_body)
+    aero_angles = compute_aero_angles(euler, v_body)
+    
+    # 3. Package it using your new function
+    state_dict = aircraft_state(v_body, v_ned, euler, angular_rates, aero_angles)
+    
+    # 4. Print the terminal output (Updated to use array indices!)
+    print(f"NED Velocity [V_N, V_E, V_D] : {state_dict['velocities_ned'].round(2)}")
+    print(f"Alpha (α): {state_dict['angles'][0]:.2f} deg")
+    print(f"Beta (β) : {state_dict['angles'][1]:.2f} deg")
+    print(f"Gamma (γ): {state_dict['angles'][2]:.2f} deg\n")
+    
     # Move the index to the next case (loops back to 0 at the end)
     current_case_idx = (current_case_idx + 1) % len(cases)
 

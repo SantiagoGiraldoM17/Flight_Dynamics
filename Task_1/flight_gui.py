@@ -21,7 +21,7 @@ class FlightDataViewer:
 
         # Process the math using the custom functions
         self.v_ned, _ = transform_flight_data(self.euler, self.v_body)
-        self.alpha, self.beta, self.gamma = compute_aero_angles(self.v_body, self.v_ned)
+        self.aero_angles = compute_aero_angles(self.euler, self.v_body)
         
         # Build the DCM for the 3D rotation using the imported function
         self.C_b_n = build_dcm(self.euler)
@@ -48,9 +48,9 @@ class FlightDataViewer:
                 f"  V_East : {self.v_ned[1]:.1f} m/s\n"
                 f"  V_Down : {self.v_ned[2]:.1f} m/s\n\n"
                 f"AERODYNAMICS:\n"
-                f"  Alpha (AoA) : {self.alpha:.1f}°\n"
-                f"  Beta (Slip) : {self.beta:.1f}°\n"
-                f"  Gamma (Path): {self.gamma:.1f}°\n")
+                f"  Alpha (AoA) : {self.aero_angles[0]:.1f}°\n"
+                f"  Beta (Slip) : {self.aero_angles[1]:.1f}°\n"
+                f"  Gamma (Path): {self.aero_angles[2]:.1f}°\n")
         
         self.data_label = ttk.Label(data_frame, text=text, font=('Courier', 11), justify=tk.LEFT)
         self.data_label.pack(anchor=tk.W)
@@ -82,7 +82,7 @@ class FlightDataViewer:
         
         # 1. Recalculate using your math engine
         self.v_ned, _ = transform_flight_data(self.euler, self.v_body)
-        self.alpha, self.beta, self.gamma = compute_aero_angles(self.v_body, self.v_ned)
+        self.aero_angles = compute_aero_angles(self.euler, self.v_body)
         
         # 2. Re-build the DCM for the 3D model rotation
         self.C_b_n = build_dcm(self.euler)
@@ -100,9 +100,9 @@ class FlightDataViewer:
                 f"  V_East : {self.v_ned[1]:.1f} m/s\n"
                 f"  V_Down : {self.v_ned[2]:.1f} m/s\n\n"
                 f"AERODYNAMICS:\n"
-                f"  Alpha (AoA) : {self.alpha:.1f}°\n"
-                f"  Beta (Slip) : {self.beta:.1f}°\n"
-                f"  Gamma (Path): {self.gamma:.1f}°\n")
+                f"  Alpha (AoA) : {self.aero_angles[0]:.1f}°\n"
+                f"  Beta (Slip) : {self.aero_angles[1]:.1f}°\n"
+                f"  Gamma (Path): {self.aero_angles[2]:.1f}°\n")
         
         self.data_label.config(text=text)
         
@@ -251,6 +251,7 @@ class FlightDataViewer:
         self.ax_3d.set_ylim([-3, 3])
         self.ax_3d.set_zlim([-3, 3])
         self.ax_3d.invert_zaxis() # Down is positive
+        self.ax_3d.invert_yaxis() # Also flip the Y-axis maintain right-hand rule with NED
         
         self.ax_3d.set_xlabel("North")
         self.ax_3d.set_ylabel("East")
