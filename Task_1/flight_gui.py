@@ -80,7 +80,7 @@ class FlightDataViewer:
         self.euler = new_euler
         self.v_body = new_v_body
         
-        # 1. Recalculate using your math engine
+        # 1. Recalculate using the math engine
         self.v_ned, _ = transform_flight_data(self.euler, self.v_body)
         self.aero_angles = compute_aero_angles(self.euler, self.v_body)
         

@@ -2,7 +2,6 @@ import tkinter as tk
 from flight_gui import FlightDataViewer
 from flight_math import transform_flight_data, compute_aero_angles, aircraft_state
 
-# Your exact 3 test cases
 cases = [
     {"name": "Case A: Straight-and-level",  "euler": [0.0, 0.0, 45.0],  "v_body": [100.0, 0.0, 0.0]},
     {"name": "Case B: Climb",               "euler": [0.0, 15.0, 0.0],  "v_body": [100.0, 0.0, 0.0]},
@@ -15,7 +14,7 @@ current_case_idx = 0
 def show_next_case(event=None):
     global current_case_idx
     
-    # Grab the exact data for the current case
+    # Grab the data for the current case
     current_state = cases[current_case_idx]
     print(f"\n{'='*40}")
     print(f">>> Switched to {current_state['name']} <<<")
@@ -32,10 +31,10 @@ def show_next_case(event=None):
     v_ned, _ = transform_flight_data(euler, v_body)
     aero_angles = compute_aero_angles(euler, v_body)
     
-    # 3. Package it using your new function
+    # 3. Package it into the dictionary format 
     state_dict = aircraft_state(v_body, v_ned, euler, angular_rates, aero_angles)
     
-    # 4. Print the terminal output (Updated to use array indices!)
+    # 4. Print the terminal output
     print(f"NED Velocity [V_N, V_E, V_D] : {state_dict['velocities_ned'].round(2)}")
     print(f"Alpha (α): {state_dict['angles'][0]:.2f} deg")
     print(f"Beta (β) : {state_dict['angles'][1]:.2f} deg")
@@ -54,7 +53,7 @@ if __name__ == "__main__":
     # Initialize the GUI with Case A's starting values
     app = FlightDataViewer(root, euler_in=cases[0]["euler"], v_body_in=cases[0]["v_body"])
     
-    # Bind the spacebar key to trigger our function
+    # Bind the spacebar key to trigger the function
     root.bind('<space>', show_next_case)
     
     # Run it once immediately to print the first case to the terminal
