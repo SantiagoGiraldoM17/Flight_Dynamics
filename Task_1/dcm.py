@@ -1,5 +1,29 @@
 import numpy as np
 
+def build_dcm(euler_vector, degrees=True):
+    """
+    Builds the Body-to-NED Direction Cosine Matrix (DCM).
+    """
+    phi, theta, psi = euler_vector
+    
+    # Convert to radians if necessary
+    if degrees:
+        phi, theta, psi = np.radians([phi, theta, psi])
+        
+    c_phi, s_phi = np.cos(phi), np.sin(phi)
+    c_theta, s_theta = np.cos(theta), np.sin(theta)
+    c_psi, s_psi = np.cos(psi), np.sin(psi)
+    
+    # Construct and return the matrix
+    C_b_n = np.array([
+        [c_theta*c_psi, s_phi*s_theta*c_psi - c_phi*s_psi, c_phi*s_theta*c_psi + s_phi*s_psi],
+        [c_theta*s_psi, s_phi*s_theta*s_psi + c_phi*c_psi, c_phi*s_theta*s_psi - s_phi*c_psi],
+        [-s_theta,      s_phi*c_theta,                     c_phi*c_theta]
+    ])
+    
+    return C_b_n
+
+
 def transform_flight_data(euler_vector, v_body_vector):
     """
     Takes Euler angles and a Body velocity vector, returns NED velocity and Euler angles.
@@ -14,48 +38,19 @@ def transform_flight_data(euler_vector, v_body_vector):
     euler_vector  : The original [phi, theta, psi] vector
     """
     
-    # Unpack the input vectors
-    phi, theta, psi = euler_vector
+    # 1. Get the DCM for the given Euler angles
+    C_b_n = build_dcm(euler_vector, True)  # We know our input is in degrees, so set degrees=True explicitly
     
+    # 2. Keep a copy of the original angles for the output
+    output_euler = np.array(euler_vector)
     
-    # Convert angles to radians
-
-    phi = np.radians(phi)
-    theta = np.radians(theta)
-    psi = np.radians(psi)
-    
-    # Pre-compute sines and cosines
-    c_phi, s_phi = np.cos(phi), np.sin(phi)
-    c_theta, s_theta = np.cos(theta), np.sin(theta)
-    c_psi, s_psi = np.cos(psi), np.sin(psi)
-    
-    # Construct the Direction Cosine Matrix (Body to NED)
-    C11 = c_theta * c_psi
-    C12 = s_phi * s_theta * c_psi - c_phi * s_psi
-    C13 = c_phi * s_theta * c_psi + s_phi * s_psi
-    
-    C21 = c_theta * s_psi
-    C22 = s_phi * s_theta * s_psi + c_phi * c_psi
-    C23 = c_phi * s_theta * s_psi - s_phi * c_psi
-    
-    C31 = -s_theta
-    C32 = s_phi * c_theta
-    C33 = c_phi * c_theta
-    
-    C_b_n = np.array([
-        [C11, C12, C13],
-        [C21, C22, C23],
-        [C31, C32, C33]
-    ])
-    
-    # Convert body velocity to column vector and multiply
+    # 3. Convert body velocity to column vector and multiply
     v_body = np.array(v_body_vector).reshape(3, 1)
     v_ned = np.dot(C_b_n, v_body)
     
-    # Return flattened NED velocity vector and the Euler angles vector
-    return v_ned.flatten(), euler_vector
+    return v_ned.flatten(), output_euler
 
-def compute_aero_angles(v_body, v_ned):
+def compute_aero_angles(euler_vector, v_body):
     """
     Computes aerodynamic and flight path angles.
     
@@ -70,7 +65,7 @@ def compute_aero_angles(v_body, v_ned):
     """
     
     u, v, w = v_body
-    v_n, v_e, v_d = v_ned
+    phi, theta, psi = euler_vector
     
     # Calculate total airspeed magnitude
     V_tot = np.linalg.norm(v_body)
@@ -86,8 +81,8 @@ def compute_aero_angles(v_body, v_ned):
     beta_rad = np.arcsin(v / V_tot)
     
     # Climb Angle (Gamma)
-    # Using -v_d because negative Down means we are climbing
-    gamma_rad = np.arcsin(-v_d / V_tot)
+    theta_rad = np.radians(theta)  
+    gamma_rad = theta_rad - alpha_rad
     
     # Convert radians to degrees for output
     alpha = np.degrees(alpha_rad)

@@ -6,8 +6,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.transforms as mtransforms
 from matplotlib.patches import Circle
 
-# Import your math engine!
-from dcm import transform_flight_data, compute_aero_angles
+# Import the math engine
+from dcm import transform_flight_data, compute_aero_angles, build_dcm
 
 class FlightDataViewer:
     def __init__(self, root, euler_in, v_body_in):
@@ -19,21 +19,12 @@ class FlightDataViewer:
         self.euler = euler_in
         self.v_body = v_body_in
 
-        # Process the math using your custom functions
+        # Process the math using the custom functions
         self.v_ned, _ = transform_flight_data(self.euler, self.v_body)
         self.alpha, self.beta, self.gamma = compute_aero_angles(self.v_body, self.v_ned)
         
-        # Re-build the DCM for the 3D rotation (since transform_flight_data doesn't return it directly)
-        phi, theta, psi = np.radians(self.euler)
-        c_phi, s_phi = np.cos(phi), np.sin(phi)
-        c_th, s_th = np.cos(theta), np.sin(theta)
-        c_psi, s_psi = np.cos(psi), np.sin(psi)
-        
-        self.C_b_n = np.array([
-            [c_th*c_psi, s_phi*s_th*c_psi - c_phi*s_psi, c_phi*s_th*c_psi + s_phi*s_psi],
-            [c_th*s_psi, s_phi*s_th*s_psi + c_phi*c_psi, c_phi*s_th*s_psi - s_phi*c_psi],
-            [-s_th,      s_phi*c_th,                     c_phi*c_th]
-        ])
+        # Build the DCM for the 3D rotation using the imported function
+        self.C_b_n = build_dcm(self.euler)
 
         self.setup_ui()
         self.update_plots()
@@ -94,16 +85,7 @@ class FlightDataViewer:
         self.alpha, self.beta, self.gamma = compute_aero_angles(self.v_body, self.v_ned)
         
         # 2. Re-build the DCM for the 3D model rotation
-        phi, theta, psi = np.radians(self.euler)
-        c_phi, s_phi = np.cos(phi), np.sin(phi)
-        c_th, s_th = np.cos(theta), np.sin(theta)
-        c_psi, s_psi = np.cos(psi), np.sin(psi)
-        
-        self.C_b_n = np.array([
-            [c_th*c_psi, s_phi*s_th*c_psi - c_phi*s_psi, c_phi*s_th*c_psi + s_phi*s_psi],
-            [c_th*s_psi, s_phi*s_th*s_psi + c_phi*c_psi, c_phi*s_th*s_psi - s_phi*c_psi],
-            [-s_th,      s_phi*c_th,                     c_phi*c_th]
-        ])
+        self.C_b_n = build_dcm(self.euler)
         
         # 3. Update the text panel
         text = (f"INPUTS (Body Frame):\n"
@@ -124,7 +106,7 @@ class FlightDataViewer:
         
         self.data_label.config(text=text)
         
-        # 4. Redraw the instruments and 3D plane!
+        # 4. Redraw the instruments and 3D plane
         self.update_plots()
 
     def update_plots(self):
@@ -197,13 +179,14 @@ class FlightDataViewer:
             tick.set_clip_path(clip_circle)
 
         # --- Draw the Static Aircraft Reference (Orange Crosshair) ---
-        self.ax_ai.plot([-0.4, -0.1], [0, 0], color='orange', lw=3)
-        self.ax_ai.plot([0.1, 0.4], [0, 0], color='orange', lw=3)
-        self.ax_ai.plot(0, 0, marker='o', color='orange', markersize=6)
+        self.ax_ai.plot([-0.4, -0.1], [0, 0], color='orange', lw=2)
+        self.ax_ai.plot([0.1, 0.4], [0, 0], color='orange', lw=2)
+        
+        center_dot = Circle((0, 0), radius=0.025, color='orange', zorder=10)
+        self.ax_ai.add_patch(center_dot)
         
         # --- Draw the Stationary Roll Pointer (Top Triangle) ---
-        # This is drawn outside the transform, so it stays perfectly still at 12 o'clock
-        self.ax_ai.fill([-0.06, 0.06, 0], [1.08, 1.08, 0.92], color='orange', zorder=10)
+        self.ax_ai.fill([-0.06, 0.06, 0], [1.08, 1.08, 0.92], color='orange', edgecolor='none', zorder=12)
 
         # --- Draw the physical instrument Bezel ---
         bezel = Circle((0, 0), radius=1.0, edgecolor='dimgray', facecolor='none', lw=6, zorder=11)
@@ -291,8 +274,8 @@ class FlightDataViewer:
 
         # Draw the wireframe lines
         self.ax_3d.plot([x[0], x[1]], [y[0], y[1]], [z[0], z[1]], color='black', lw=3) # Fuselage
-        self.ax_3d.plot([x[2], x[3]], [y[2], y[3]], [z[2], z[3]], color='blue', lw=3)  # Wings
-        self.ax_3d.plot([x[1], x[4]], [y[1], y[4]], [z[1], z[4]], color='red', lw=3)   # Tail
+        self.ax_3d.plot([x[2], x[3]], [y[2], y[3]], [z[2], z[3]], color='black', lw=3)  # Wings
+        self.ax_3d.plot([x[1], x[4]], [y[1], y[4]], [z[1], z[4]], color='black', lw=3)   # Tail
 
         # --- Draw Fixed NED Axes for Reference ---
         # Draw thick colored arrows for North, East, and Down
