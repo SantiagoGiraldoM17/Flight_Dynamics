@@ -1,6 +1,6 @@
 import tkinter as tk
 from flight_gui import FlightDataViewer
-from dcm import transform_flight_data, compute_aero_angles, aircraft_state
+from flight_math import transform_flight_data, compute_aero_angles, aircraft_state
 
 # Your exact 3 test cases
 cases = [
