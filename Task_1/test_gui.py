@@ -55,7 +55,7 @@ if __name__ == "__main__":
     
     # Bind the spacebar key to trigger the function
     root.bind('<space>', show_next_case)
-    
+     
     # Run it once immediately to print the first case to the terminal
     show_next_case()
     

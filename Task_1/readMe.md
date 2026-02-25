@@ -26,3 +26,5 @@ Our custom interface fulfills all visual requirements by displaying:
 * Live numerical values.
 * A 3D rendered aircraft.
 
+**Live Dashboard Overview:**
+![Flight Data Viewer GUI](gui_screenshot.png)
