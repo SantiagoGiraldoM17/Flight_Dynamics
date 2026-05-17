@@ -1,40 +1,5 @@
 import numpy as np
 
-# Aircraft parameters (example values, need to be adjusted)
-m = 1000.0  # mass kg
-Ixx = 1000.0  # moment of inertia kg m^2
-Iyy = 2000.0
-Izz = 1500.0
-Ixz = 100.0
-S = 20.0  # wing area m^2
-b = 10.0  # wing span m
-c = 2.0   # mean chord m
-rho = 1.225  # air density kg/m^3
-
-# Aerodynamic coefficients (simplified)
-C_L0 = 0.1
-C_La = 5.0
-C_D0 = 0.02
-C_Da2 = 0.1
-C_Ybeta = -0.5
-C_Yp = 0.0
-C_Yr = 0.1
-C_lbeta = -0.1
-C_lp = -0.5
-C_lr = 0.1
-C_lda = 0.1  # aileron
-C_m0 = 0.0
-C_ma = -1.0
-C_mq = -5.0
-C_mde = -1.0  # elevator
-C_nbeta = 0.1
-C_np = -0.1
-C_nr = -0.5
-C_ndr = -0.1  # rudder
-
-# Thrust positions (example)
-thrust1_pos = np.array([0.0, -1.0, 0.0])  # left engine
-thrust2_pos = np.array([0.0, 1.0, 0.0])   # right engine
 
 def build_dcm(euler_vector, degrees=True):
     """
@@ -140,79 +105,9 @@ def compute_aero_angles(euler_vector, v_body, v_ned=None):
     
     return aero_angles
 
-def aircraft_state(v_body, v_ned, euler, angular_rates, aero_angles, degrees=True):
-    """
-    Returns aircraft state values in the structured dictionary format 
-    required by the assignment.
-    """
-    
-    # 1. Build the exact dictionary structure the assignment requests
-    state_values = {
-        "angles": np.array(aero_angles),           # [alpha, beta, gamma] in degrees
-        "velocities_body": np.array(v_body),     # [u, v, w] in body frame [m/s]
-        "velocities_ned": np.array(v_ned),          # [V_N, V_E, V_D] in NED frame [m/s]
-        "angular_rates": np.array(angular_rates),       # [p, q, r] roll, pitch, yaw rates [rad/s]
-        "attitude": np.array(euler)     # [phi, theta, psi] Euler angles
-    }
-    
-    return state_values
-
-
 # ============================================================
-# Phase 1 — Angular Rates → Euler Angles
+# Euler-angle housekeeping
 # ============================================================
-
-def calculate_H(phi, theta):
-    """
-    Builds the 3×3 kinematic transformation matrix H that relates
-    body angular rates [p, q, r] to Euler angle rates [φ̇, θ̇, ψ̇].
-
-    Φ̇ = H · ω_B
-
-    Inputs (radians):
-        phi   : roll angle  (φ)
-        theta : pitch angle (θ)
-
-    Returns:
-        H : 3×3 numpy array
-    """
-    s_phi = np.sin(phi)
-    c_phi = np.cos(phi)
-    t_theta = np.tan(theta)
-    sec_theta = 1.0 / np.cos(theta)
-
-    H = np.array([
-        [1.0,  s_phi * t_theta,    c_phi * t_theta],
-        [0.0,  c_phi,             -s_phi           ],
-        [0.0,  s_phi * sec_theta,  c_phi * sec_theta]
-    ])
-    return H
-
-
-def euler_rate(H, omega_B):
-    """
-    Computes Euler angle rates: Φ̇ = H × ω_B
-
-    Inputs:
-        H       : 3×3 kinematic matrix from calculate_H
-        omega_B : [p, q, r] angular rates in body frame (rad/s)
-
-    Returns:
-        phi_dot, theta_dot, psi_dot  as a 1-D array (rad/s)
-    """
-    omega = np.array(omega_B).flatten()
-    return H @ omega
-
-
-def integrate(derivative, prev_value, dt):
-    """
-    Generic first-order (Euler) numerical integrator.
-    new_value = prev_value + derivative * dt
-
-    Works for scalars and arrays alike.
-    """
-    return np.asarray(prev_value) + np.asarray(derivative) * dt
-
 
 def terminator(euler_angles_rad):
     """
@@ -248,41 +143,7 @@ def terminator(euler_angles_rad):
 
 
 # ============================================================
-# Phase 2 — Body Accelerations → NED Velocity & Position
-# ============================================================
-
-def accel_body_to_ned(C_b_e, accel_body):
-    """
-    Transforms body-frame accelerations to NED frame.
-
-    Inputs:
-        C_b_e      : 3×3 DCM (body-to-NED)
-        accel_body : [ax, ay, az] accelerations in body frame (m/s²)
-
-    Returns:
-        accel_ned : [aN, aE, aD] accelerations in NED frame (m/s²)
-    """
-    return C_b_e @ np.array(accel_body).flatten()
-
-
-def add_gravity(accel_ned, g=9.81):
-    """
-    Adds gravity to NED-frame accelerations.
-    In NED, gravity acts in the +Down direction: [0, 0, +g]
-
-    Inputs:
-        accel_ned : [aN, aE, aD] (m/s²)
-        g         : gravitational acceleration (default 9.81 m/s²)
-
-    Returns:
-        corrected : [aN, aE, aD + g] (m/s²)
-    """
-    gravity = np.array([0.0, 0.0, g])
-    return np.asarray(accel_ned) + gravity
-
-
-# ============================================================
-# Phase 3 — Quaternion & Euler Axis
+# Quaternion & Euler axis
 # ============================================================
 
 def dcm_to_quaternion(C):
@@ -399,104 +260,3 @@ def quaternion_axis(q, theta):
     return e_hat
 
 
-def compute_rcam_derivatives(state, control):
-    """
-    Computes the derivatives of the state using RCAM model.
-
-    State: [u, v, w, p, q, r, x, y, z, phi, theta, psi]
-    Control: [aileron_deg, elevator_deg, rudder_deg, thrust1_N, thrust2_N]
-
-    Returns: state_dot
-    """
-    u, v, w, p, q, r, x, y, z, phi, theta, psi = state
-    da, de, dr, T1, T2 = control
-
-    # Convert angles to radians
-    phi_rad = np.radians(phi)
-    theta_rad = np.radians(theta)
-    psi_rad = np.radians(psi)
-    da_rad = np.radians(da)
-    de_rad = np.radians(de)
-    dr_rad = np.radians(dr)
-
-    # Airspeed
-    V = np.sqrt(u**2 + v**2 + w**2)
-    if V < 1e-6:
-        alpha = 0.0
-        beta = 0.0
-    else:
-        alpha = np.arctan2(w, u)
-        beta = np.arcsin(np.clip(v / V, -1, 1))
-
-    # Dynamic pressure
-    q_dyn = 0.5 * rho * V**2
-
-    # Aerodynamic coefficients
-    C_L = C_L0 + C_La * alpha
-    C_D = C_D0 + C_Da2 * alpha**2
-    C_Y = C_Ybeta * beta + C_Yp * (p * b / (2 * V) if V > 0 else 0) + C_Yr * (r * b / (2 * V) if V > 0 else 0)
-
-    C_l = C_lbeta * beta + C_lp * (p * b / (2 * V) if V > 0 else 0) + C_lr * (r * b / (2 * V) if V > 0 else 0) + C_lda * da_rad
-    C_m = C_m0 + C_ma * alpha + C_mq * (q * c / (2 * V) if V > 0 else 0) + C_mde * de_rad
-    C_n = C_nbeta * beta + C_np * (p * b / (2 * V) if V > 0 else 0) + C_nr * (r * b / (2 * V) if V > 0 else 0) + C_ndr * dr_rad
-
-    # Forces in body frame (aerodynamics)
-    F_aero_x = q_dyn * S * (-C_D * np.cos(alpha) + C_L * np.sin(alpha))
-    F_aero_y = q_dyn * S * C_Y
-    F_aero_z = q_dyn * S * (-C_D * np.sin(alpha) - C_L * np.cos(alpha))
-
-    # Thrust in body frame (assume along x)
-    F_thrust_x = T1 + T2
-    F_thrust_y = 0.0
-    F_thrust_z = 0.0
-
-    # Gravity in body frame
-    g = 9.81
-    C_n_b = build_dcm([phi, theta, psi], degrees=True).T  # NED to body
-    gravity_body = C_n_b @ np.array([0, 0, g])  # gravity in NED is [0,0,g], transform to body
-
-    F_x = F_aero_x + F_thrust_x + gravity_body[0]
-    F_y = F_aero_y + F_thrust_y + gravity_body[1]
-    F_z = F_aero_z + F_thrust_z + gravity_body[2]
-
-    # Moments in body frame
-    L = q_dyn * S * b * C_l
-    M = q_dyn * S * c * C_m
-    N = q_dyn * S * b * C_n
-
-    # Thrust moments (assume engines at y = ±1 m)
-    d = 1.0  # distance from CG
-    M += (T2 - T1) * d  # torque from thrust difference
-
-    # Equations of motion
-    # Linear accelerations
-    u_dot = (F_x / m) - q * w + r * v
-    v_dot = (F_y / m) - r * u + p * w
-    w_dot = (F_z / m) - p * v + q * u
-
-    # Angular accelerations
-    I = np.array([[Ixx, 0, -Ixz],
-                  [0, Iyy, 0],
-                  [-Ixz, 0, Izz]])
-    omega = np.array([p, q, r])
-    M_vec = np.array([L, M, N])
-    omega_dot = np.linalg.solve(I, M_vec - np.cross(omega, I @ omega))
-
-    # Position derivatives (in NED)
-    C_b_n = build_dcm([phi, theta, psi], degrees=True)
-    vel_ned = C_b_n @ np.array([u, v, w])
-    x_dot, y_dot, z_dot = vel_ned
-
-    # Euler angle derivatives
-    H = calculate_H(phi_rad, theta_rad)
-    euler_dot = euler_rate(H, [p, q, r])
-
-    # Convert euler_dot to degrees
-    euler_dot_deg = np.degrees(euler_dot)
-
-    state_dot = np.array([u_dot, v_dot, w_dot,
-                          omega_dot[0], omega_dot[1], omega_dot[2],
-                          x_dot, y_dot, z_dot,
-                          euler_dot_deg[0], euler_dot_deg[1], euler_dot_deg[2]])
-
-    return state_dot
