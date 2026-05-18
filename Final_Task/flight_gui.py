@@ -1,3 +1,6 @@
+import os
+import struct
+import colorsys
 import numpy as np
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
                               QLabel, QTabWidget, QSplitter, QPushButton, QComboBox)
@@ -10,6 +13,369 @@ import pyqtgraph.opengl as gl
 from flight_math import transform_flight_data, compute_aero_angles, build_dcm
 
 pg.setConfigOptions(antialias=True, background='#1a1a1a', foreground='w')
+
+
+# ═══════════════════════════════════════════════════════════
+#  Aircraft 3D model configuration
+# ═══════════════════════════════════════════════════════════
+#
+# Point _AIRCRAFT_STL_PATH at a binary .stl OR a Wavefront .obj file
+# next to flight_gui.py and it is auto-loaded on startup. The loader
+# dispatches on the file extension. If the file is missing or fails
+# to parse, the code falls back to the hand-coded wireframe.
+#
+# Color support:
+#   .stl  - VisCAM/SolidView per-face extension (RGB555 in attribute
+#           byte) or Materialise 'COLOR=' header extension.
+#   .obj  - reads diffuse Kd from any .mtl file referenced by 'mtllib'.
+# If no embedded colors are found, the mesh is rendered as flat
+# _AIRCRAFT_COLOR.
+#
+# The model is centred, scaled to fit AIRCRAFT_TARGET_SIZE, then
+# rotated by AIRCRAFT_ORIENT to put it in body-frame convention
+# (+x=nose, +y=right wing, +z=down). Tweak AIRCRAFT_ORIENT if the
+# model appears upside-down, sideways or mirrored.
+#
+# Per-frame cost is just a 4x4 matrix update — independent of how
+# many triangles the mesh has — because the rotation is applied as
+# a GPU model-matrix transform, not by re-uploading vertices.
+#
+_AIRCRAFT_STL_PATH    = os.path.join(os.path.dirname(__file__), '737.obj')
+_AIRCRAFT_TARGET_SIZE = 4.0          # span in GL units (axes are ~2.5)
+_AIRCRAFT_COLOR       = (0.78, 0.78, 0.85, 1.0)
+
+# Fine-tune position offset (body frame: +X=nose, +Y=right, +Z=down).
+# Auto-centering handles most models out of the box; nudge here if you
+# want the belly resting on the grid (try (0, 0, -0.3)) or the model
+# raised "in flight" above the grid (try (0, 0, -0.6)).
+_AIRCRAFT_OFFSET      = (0.0, 0.0, 0.0)
+
+# Synthesize a distinct color per material when the .mtl is uninformative
+# (e.g. PBR/textured Blender exports where every Kd is the same placeholder
+# gray and the real color lives in PNG textures we cannot render). Set to
+# False to always use whatever Kd the .mtl gives, even if everything ends
+# up gray.
+_AIRCRAFT_AUTO_PALETTE = True
+
+# Orientation matrix: maps STL model axes → body frame axes.
+# Each ROW is a body-frame axis expressed in STL coordinates.
+#   Row 0 -> body +X (nose forward)
+#   Row 1 -> body +Y (right wing)
+#   Row 2 -> body +Z (down, belly)
+#
+# Default assumes STL convention "+Z = fuselage length, +Y = up,
+# +X = wingspan" (common from many CAD exports). If the model looks
+# wrong on first launch, try one of the variants in _ORIENT_PRESETS
+# below or just edit the matrix entries directly (use 0, 1, -1 only).
+_AIRCRAFT_ORIENT = np.array([
+[0,0,1],[1,0,0],[0,-1,0]  # body +Z (down)        = STL -Y  (i.e. STL +Y is up)
+], dtype=np.float32)
+
+# Common alternates to try if the default looks wrong.
+# Copy one of these into _AIRCRAFT_ORIENT.
+_ORIENT_PRESETS = {
+    # STL already in body frame (+X=nose, +Y=right, +Z=down)
+    'body_native':   [[1,0,0],[0,1,0],[0,0,1]],
+    # STL +X=nose, +Y=right, +Z=up   (just flip Z)
+    'x_nose_z_up':   [[1,0,0],[0,1,0],[0,0,-1]],
+    # STL +Y=nose, +X=right, +Z=up
+    'y_nose_z_up':   [[0,1,0],[1,0,0],[0,0,-1]],
+    # STL +Z=nose, +Y=up, +X=right wing  (default chosen here)
+    'z_nose_y_up':   [[0,0,1],[1,0,0],[0,-1,0]],
+    # STL +Z=tail, +Y=up, +X=right wing  (nose-flipped variant)
+    'neg_z_nose':    [[0,0,-1],[1,0,0],[0,-1,0]],
+    # STL +Z=nose, +X=up, +Y=right wing
+    'z_nose_x_up':   [[0,0,1],[0,1,0],[-1,0,0]],
+}
+
+
+def _load_stl_binary(path):
+    """Read a binary STL file and return (verts, faces, n_tri, face_colors, vertex_colors).
+
+    vertex_colors is always None for STL (the format has no per-vertex colour
+    extension); included only so the tuple shape matches _load_obj's return.
+
+    face_colors is an (M, 4) float32 RGBA array if the STL embeds colors via
+    either the VisCAM/SolidView per-face extension (attribute byte: bit 15 =
+    'valid' flag, bits 10..14 = R, 5..9 = G, 0..4 = B as RGB555) or the
+    Materialise Magics global-color header extension ('COLOR=' + 4 RGBA
+    bytes). If neither is present, face_colors is None and the caller
+    should fall back to a flat color.
+
+    Vertices are not deduplicated - pyqtgraph's GLMeshItem handles redundant
+    vertices fine, and skipping the dedup keeps load time well under a
+    second even for ~500k-triangle models.
+    """
+    with open(path, 'rb') as f:
+        header = f.read(80)                          # 80-byte header
+        n_tri  = struct.unpack('<I', f.read(4))[0]   # triangle count
+        rec = np.dtype([
+            ('normal', '<f4', 3),
+            ('v0',     '<f4', 3),
+            ('v1',     '<f4', 3),
+            ('v2',     '<f4', 3),
+            ('attr',   '<u2'),
+        ])
+        data = np.fromfile(f, dtype=rec, count=n_tri)
+
+    verts = np.stack([data['v0'], data['v1'], data['v2']],
+                      axis=1).reshape(-1, 3).astype(np.float32)
+    faces = np.arange(3 * n_tri, dtype=np.uint32).reshape(-1, 3)
+
+    # ── Per-face color extraction (VisCAM / SolidView extension) ────
+    attr  = data['attr']
+    valid = (attr & 0x8000) != 0
+    face_colors = None
+    if valid.any():
+        r = ((attr >> 10) & 0x1F).astype(np.float32) / 31.0
+        g = ((attr >>  5) & 0x1F).astype(np.float32) / 31.0
+        b = ( attr        & 0x1F).astype(np.float32) / 31.0
+        default_rgb = np.array(_AIRCRAFT_COLOR[:3], dtype=np.float32)
+        rgb = np.where(valid[:, None],
+                       np.stack([r, g, b], axis=1),
+                       default_rgb)
+        face_colors = np.concatenate(
+            [rgb, np.ones((n_tri, 1), dtype=np.float32)], axis=1)
+    else:
+        # ── Materialise Magics global color in the header ───────────
+        idx = header.find(b'COLOR=')
+        if idx >= 0 and idx + 10 <= 80:
+            rgba = (np.frombuffer(header[idx+6:idx+10], dtype=np.uint8)
+                      .astype(np.float32) / 255.0)
+            face_colors = np.tile(rgba, (n_tri, 1))
+
+    return verts, faces, n_tri, face_colors, None
+
+
+def _load_mtl(path):
+    """Parse a Wavefront .mtl file. Returns {material_name: (r, g, b, a)}.
+
+    Only the diffuse color (Kd) and opacity (d / Tr) are extracted - we
+    do not have texture support in pyqtgraph's GL, so map_Kd etc. are
+    ignored. Missing / unparseable file -> empty dict.
+    """
+    materials = {}
+    cur_name = [None]
+    cur_kd   = [(0.78, 0.78, 0.85)]
+    cur_d    = [1.0]
+
+    def _commit():
+        if cur_name[0] is not None:
+            r, g, b = cur_kd[0]
+            materials[cur_name[0]] = (r, g, b, cur_d[0])
+
+    try:
+        with open(path, 'r', errors='replace') as f:
+            for raw in f:
+                parts = raw.strip().split()
+                if not parts or parts[0].startswith('#'):
+                    continue
+                kw = parts[0]
+                if kw == 'newmtl':
+                    _commit()
+                    cur_name[0] = ' '.join(parts[1:])
+                    cur_kd[0]   = (0.78, 0.78, 0.85)
+                    cur_d[0]    = 1.0
+                elif kw == 'Kd' and len(parts) >= 4:
+                    cur_kd[0] = (float(parts[1]), float(parts[2]), float(parts[3]))
+                elif kw == 'd' and len(parts) >= 2:
+                    cur_d[0] = float(parts[1])
+                elif kw == 'Tr' and len(parts) >= 2:        # transparency
+                    cur_d[0] = 1.0 - float(parts[1])
+        _commit()
+    except OSError:
+        pass
+    return materials
+
+
+def _load_obj(path):
+    """Read a Wavefront .obj file (+ any referenced .mtl).
+
+    Returns (verts, faces, n_tri, face_colors, vertex_colors).
+        - vertex_colors (N,4) is populated when the OBJ uses the inline
+          'v x y z r g b' extension (produced by bake_obj_texture.py)
+          and takes precedence over face_colors at render time.
+        - face_colors (M,4) is built per-face from each face's
+          material's Kd if 'usemtl' / 'mtllib' were used.
+        - Either or both can be None if no colour info is present.
+
+    Notes:
+        - Triangulates n-gons via a fan from the first vertex of each face.
+        - Handles 1-based and negative face indices.
+        - Vertex normals (vn) and texture coords (vt) are parsed but
+          discarded; pyqtgraph computes its own normals, and there is
+          no live-texture support (use bake_obj_texture.py instead).
+    """
+    obj_dir      = os.path.dirname(path)
+    raw_verts    = []                             # list of [x, y, z]
+    raw_v_colors = []                             # parallel: [r,g,b] or None
+    faces_idx    = []                             # list of (v0, v1, v2)
+    face_mat     = []                             # parallel to faces_idx
+    materials    = {}                             # name -> (r,g,b,a)
+    cur_mat      = None
+
+    with open(path, 'r', errors='replace') as f:
+        for raw in f:
+            parts = raw.strip().split()
+            if not parts or parts[0].startswith('#'):
+                continue
+            kw = parts[0]
+            if kw == 'v':
+                # 'v x y z'  or  'v x y z r g b'  (inline vertex color
+                # extension - produced by bake_obj_texture.py).
+                raw_verts.append([float(parts[1]), float(parts[2]),
+                                   float(parts[3])])
+                if len(parts) >= 7:
+                    raw_v_colors.append([float(parts[4]), float(parts[5]),
+                                          float(parts[6])])
+                else:
+                    raw_v_colors.append(None)
+            elif kw == 'f':
+                # 'f v[/vt[/vn]] v[/vt[/vn]] ...'  - any polygon size
+                idx = []
+                n_v = len(raw_verts)
+                for tok in parts[1:]:
+                    v = int(tok.split('/')[0])
+                    if v < 0:
+                        v = n_v + v        # negative: count from end
+                    else:
+                        v = v - 1          # OBJ is 1-based
+                    idx.append(v)
+                # Fan triangulation
+                for i in range(1, len(idx) - 1):
+                    faces_idx.append((idx[0], idx[i], idx[i+1]))
+                    face_mat.append(cur_mat)
+            elif kw == 'mtllib':
+                # Resolve the referenced .mtl with three fallbacks, because
+                # downloaded OBJs are frequently renamed without updating
+                # the embedded mtllib directive:
+                #   1) the exact name in the OBJ                  (3d-model.mtl)
+                #   2) <obj_basename>.mtl   next to the OBJ       (737.mtl)
+                #   3) the single .mtl file in the same directory (if exactly one)
+                referenced  = ' '.join(parts[1:])
+                obj_base    = os.path.splitext(os.path.basename(path))[0]
+                candidates  = [
+                    os.path.join(obj_dir, referenced),
+                    os.path.join(obj_dir, obj_base + '.mtl'),
+                ]
+                same_dir_mtls = [
+                    f for f in os.listdir(obj_dir) if f.lower().endswith('.mtl')
+                ] if os.path.isdir(obj_dir) else []
+                if len(same_dir_mtls) == 1:
+                    candidates.append(os.path.join(obj_dir, same_dir_mtls[0]))
+
+                for mtl_path in candidates:
+                    if os.path.isfile(mtl_path):
+                        loaded = _load_mtl(mtl_path)
+                        if loaded:
+                            materials.update(loaded)
+                            if os.path.basename(mtl_path) != referenced:
+                                print(f"[flight_gui] OBJ referenced '{referenced}' "
+                                      f"but used '{os.path.basename(mtl_path)}' instead.")
+                            break
+                else:
+                    print(f"[flight_gui] OBJ referenced '{referenced}' but no "
+                          f".mtl was found in {obj_dir!r}.")
+            elif kw == 'usemtl':
+                cur_mat = ' '.join(parts[1:])
+
+    verts = np.asarray(raw_verts, dtype=np.float32)
+    faces = np.asarray(faces_idx, dtype=np.uint32)
+    n_tri = len(faces)
+
+    # Build per-face colors if any usemtl was active AND the .mtl
+    # actually defined that material.
+    face_colors = None
+    used_mats   = sorted({m for m in face_mat if m})
+    if used_mats and materials:
+        default = np.array(_AIRCRAFT_COLOR, dtype=np.float32)
+        fc      = np.tile(default, (n_tri, 1))
+        for i, m in enumerate(face_mat):
+            if m and m in materials:
+                fc[i] = materials[m]
+        face_colors = fc
+
+    # ── Auto-palette fallback ──────────────────────────────────
+    # If the .mtl is uninformative (PBR/textured exports where every
+    # Kd is the same placeholder gray), synthesize a distinct hue per
+    # material so the user actually sees a multi-color aircraft.
+    if (_AIRCRAFT_AUTO_PALETTE and len(used_mats) >= 3
+            and face_colors is not None):
+        n_unique = len(np.unique(np.round(face_colors[:, :3], 3), axis=0))
+        if n_unique <= 2:
+            palette = {}
+            n = len(used_mats)
+            for i, name in enumerate(used_mats):
+                # HSV cycle, muted saturation/value so it looks plane-y
+                hue = (i / n) * 0.85          # avoid wrap to red
+                r, g, b = colorsys.hsv_to_rgb(hue, 0.55, 0.85)
+                palette[name] = (r, g, b, 1.0)
+            fc = np.tile(np.array(_AIRCRAFT_COLOR, dtype=np.float32),
+                         (n_tri, 1))
+            for i, m in enumerate(face_mat):
+                if m in palette:
+                    fc[i] = palette[m]
+            face_colors = fc
+            print(f"[flight_gui] .mtl had only {n_unique} unique color(s) "
+                  f"across {n} materials (textured / placeholder Kd); "
+                  f"auto-coloring with distinct hues per material.")
+
+    # ── Inline vertex colours ('v x y z r g b') ────────────────
+    # Produced by bake_obj_texture.py. These win over face colours.
+    vertex_colors = None
+    if any(c is not None for c in raw_v_colors):
+        default = list(_AIRCRAFT_COLOR[:3])
+        rgb     = np.array(
+            [c if c is not None else default for c in raw_v_colors],
+            dtype=np.float32)
+        vertex_colors = np.concatenate(
+            [rgb, np.ones((len(rgb), 1), dtype=np.float32)], axis=1)
+
+    return verts, faces, n_tri, face_colors, vertex_colors
+
+
+def _load_model(path):
+    """Dispatch to the right loader based on file extension.
+
+    Returns (verts, faces, n_tri, face_colors)  -- the same 4-tuple for
+    every format, so the caller does not need to care which one was used.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext == '.stl':
+        return _load_stl_binary(path)
+    if ext == '.obj':
+        return _load_obj(path)
+    raise ValueError(f"Unsupported aircraft model format: {ext!r} (use .stl or .obj)")
+
+
+def _normalize_aircraft_mesh(verts):
+    """Centre on bbox midpoint, scale to AIRCRAFT_TARGET_SIZE, rotate by
+    AIRCRAFT_ORIENT to align with body-frame convention, then re-centre
+    vertically on the fuselage centerline (median Z) so a tall vertical
+    stabilizer does not push the visible fuselage below the grid.
+
+    Final axis convention after this call:
+        +X = nose forward,  +Y = right wing,  +Z = down (belly)
+    """
+    bbox_min = verts.min(axis=0)
+    bbox_max = verts.max(axis=0)
+    centre   = 0.5 * (bbox_min + bbox_max)
+    verts    = verts - centre
+    extent   = float((bbox_max - bbox_min).max())
+    if extent > 0:
+        verts = verts * (_AIRCRAFT_TARGET_SIZE / extent)
+    verts = verts @ _AIRCRAFT_ORIENT.T               # to body frame
+
+    # ── Re-centre vertical axis on the fuselage line ────────────────
+    # For any normal aircraft most vertices live in the fuselage tube,
+    # so the median Z lands close to the centerline. The bbox midpoint
+    # would be biased upward by the tip of the vertical stabilizer.
+    verts[:, 2] -= float(np.median(verts[:, 2]))
+
+    # Add the user-tweakable fine-tune offset (default: zero).
+    verts = verts + np.asarray(_AIRCRAFT_OFFSET, dtype=np.float32)
+
+    return verts.astype(np.float32)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -585,7 +951,8 @@ class FlightDataViewer(QWidget):
         outer.addWidget(instr, stretch=1)
 
     def _setup_aircraft_gl(self):
-        """Populate the 3D aircraft GLViewWidget with static axes and dynamic wireframe."""
+        """Populate the 3D aircraft GLViewWidget with static axes and the
+        dynamic aircraft (STL model if available, wireframe otherwise)."""
         # NED reference axes mapped to GL: (GL x=E, GL y=N, GL z=-D)
         # — matches the trajectory view's convention so East shows on the right
         self.gl_aircraft.addItem(_gl_axis([2.5,  0,   0],  (0, 1, 0, 1)))   # E green
@@ -611,33 +978,72 @@ class FlightDataViewer(QWidget):
         grid.setSpacing(1, 1)
         self.gl_aircraft.addItem(grid)
 
-        # Dynamic aircraft wireframe (fuselage, spine to vert-tail)
+        # Velocity vector (always drawn, both STL and wireframe paths)
         zero2 = np.zeros((2, 3), dtype=np.float32)
-        ac_color = (0.95, 0.95, 0.95, 1.0)
-        self.ac_fuselage = gl.GLLinePlotItem(pos=zero2, color=ac_color, width=3,
-                                              antialias=True, mode='lines')
-        self.ac_tail     = gl.GLLinePlotItem(pos=zero2, color=ac_color, width=3,
-                                              antialias=True, mode='lines')
-        self.ac_velocity = gl.GLLinePlotItem(pos=zero2, color=(1, 0, 1, 1), width=2,
-                                              antialias=True, mode='lines')
-        for item in (self.ac_fuselage, self.ac_tail, self.ac_velocity):
-            self.gl_aircraft.addItem(item)
+        self.ac_velocity = gl.GLLinePlotItem(pos=zero2, color=(1, 0, 1, 1),
+                                              width=2, antialias=True, mode='lines')
+        self.gl_aircraft.addItem(self.ac_velocity)
 
-        # Surface panels: wings, horizontal & vertical stabilizers
-        self.ac_panels = {}
-        for name, rgba in _AC_PANEL_COLORS.items():
-            fc = np.array([rgba, rgba], dtype=np.float32)   # 2 faces, same color
-            item = gl.GLMeshItem(
-                vertexes=np.zeros((4, 3), dtype=np.float32),
-                faces=_PANEL_FACES,
-                faceColors=fc,
-                smooth=False,
-                drawEdges=True,
-                edgeColor=(0.9, 0.9, 0.9, 0.6),
-            )
-            item._fc = fc   # keep a reference to avoid re-allocating
-            self.gl_aircraft.addItem(item)
-            self.ac_panels[name] = item
+        # ── Try to load an STL aircraft model ────────────────────────
+        self._stl_loaded = False
+        if os.path.isfile(_AIRCRAFT_STL_PATH):
+            try:
+                verts, faces, n_tri, face_colors, vertex_colors = \
+                    _load_model(_AIRCRAFT_STL_PATH)
+                verts = _normalize_aircraft_mesh(verts)
+                kwargs = dict(
+                    vertexes=verts, faces=faces,
+                    smooth=False,           # flat-shaded; fast load for big meshes
+                    shader='shaded',
+                    drawEdges=False,
+                    glOptions='opaque',
+                )
+                if vertex_colors is not None:
+                    # Baked texture output: per-vertex colors give the best
+                    # appearance with smooth shading so the sampled pixels
+                    # interpolate across each triangle.
+                    kwargs['vertexColors'] = vertex_colors
+                    kwargs['smooth']       = True
+                    color_note = "with baked per-vertex texture colors"
+                elif face_colors is not None:
+                    kwargs['faceColors'] = face_colors
+                    color_note = "with embedded per-face colors"
+                else:
+                    kwargs['color'] = _AIRCRAFT_COLOR
+                    color_note = "no embedded colors (using default flat color)"
+                self.ac_model = gl.GLMeshItem(**kwargs)
+                self.gl_aircraft.addItem(self.ac_model)
+                self._stl_loaded = True
+                print(f"[flight_gui] Loaded model '{os.path.basename(_AIRCRAFT_STL_PATH)}': "
+                      f"{n_tri} triangles, {len(verts)} vertices, {color_note}.")
+            except Exception as e:
+                print(f"[flight_gui] STL load failed ({e!r}); using wireframe.")
+
+        # ── Fallback wireframe (only if STL did not load) ────────────
+        if not self._stl_loaded:
+            ac_color = (0.95, 0.95, 0.95, 1.0)
+            self.ac_fuselage = gl.GLLinePlotItem(pos=zero2, color=ac_color, width=3,
+                                                  antialias=True, mode='lines')
+            self.ac_tail     = gl.GLLinePlotItem(pos=zero2, color=ac_color, width=3,
+                                                  antialias=True, mode='lines')
+            for item in (self.ac_fuselage, self.ac_tail):
+                self.gl_aircraft.addItem(item)
+
+            # Surface panels: wings, horizontal & vertical stabilizers
+            self.ac_panels = {}
+            for name, rgba in _AC_PANEL_COLORS.items():
+                fc = np.array([rgba, rgba], dtype=np.float32)
+                item = gl.GLMeshItem(
+                    vertexes=np.zeros((4, 3), dtype=np.float32),
+                    faces=_PANEL_FACES,
+                    faceColors=fc,
+                    smooth=False,
+                    drawEdges=True,
+                    edgeColor=(0.9, 0.9, 0.9, 0.6),
+                )
+                item._fc = fc
+                self.gl_aircraft.addItem(item)
+                self.ac_panels[name] = item
 
     # ── Tabs 2–4: Time-series ────────────────────────────
 
@@ -855,8 +1261,32 @@ class FlightDataViewer(QWidget):
     # 3D aircraft update
     # ─────────────────────────────────────────────────────
 
+    # NED -> GL coordinate swap (constant): GL=[E, N, Up] = M_swap @ NED=[N, E, D]
+    _M_SWAP_NED_GL = np.array([[0.0, 1.0,  0.0],
+                                [1.0, 0.0,  0.0],
+                                [0.0, 0.0, -1.0]])
+
     def _update_3d_aircraft(self):
-        # ── Fuselage & spine wireframe ──────────────────────────
+        # ── Velocity vector (always drawn) ──────────────────────
+        v_norm = np.linalg.norm(self.v_ned)
+        if v_norm > 1e-3:
+            v_draw = (self.v_ned / v_norm) * 2 if v_norm > 2 else self.v_ned
+            vn, ve, vd = v_draw
+            self.ac_velocity.setData(
+                pos=np.array([[0, 0, 0], [ve, vn, -vd]], dtype=np.float32))
+
+        # ── STL path: apply a single 4x4 transform on the GPU ───
+        # This is O(1) per frame regardless of triangle count, because the
+        # mesh stays uploaded and only the model matrix changes.
+        if self._stl_loaded:
+            R = self._M_SWAP_NED_GL @ self.C_b_n      # body -> GL (3x3)
+            T = np.eye(4, dtype=np.float64)
+            T[:3, :3] = R
+            self.ac_model.setTransform(
+                pg.Transform3D(*T.flatten().tolist()))
+            return
+
+        # ── Wireframe fallback: per-vertex re-upload (small mesh) ──
         # Body-frame key points: nose, tail, vert-tail-tip
         pts_body = np.array([
             [ 2.0,  0.0,  0.0],   # 0 Nose
@@ -884,14 +1314,6 @@ class FlightDataViewer(QWidget):
             item.setMeshData(vertexes=verts.astype(np.float32),
                              faces=_PANEL_FACES,
                              faceColors=item._fc)
-
-        # ── Velocity vector ─────────────────────────────────────
-        v_norm = np.linalg.norm(self.v_ned)
-        if v_norm > 1e-3:
-            v_draw = (self.v_ned / v_norm) * 2 if v_norm > 2 else self.v_ned
-            vn, ve, vd = v_draw
-            self.ac_velocity.setData(
-                pos=np.array([[0, 0, 0], [ve, vn, -vd]], dtype=np.float32))
 
     # ─────────────────────────────────────────────────────
     # Time-series update
