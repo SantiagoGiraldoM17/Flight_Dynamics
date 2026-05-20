@@ -16,6 +16,16 @@ pg.setConfigOptions(antialias=True, background='#1a1a1a', foreground='w')
 
 
 # ═══════════════════════════════════════════════════════════
+#  Time-series plot styling
+# ═══════════════════════════════════════════════════════════
+# Bright Material-A200 palette - good contrast against the dark
+# '#1a1a1a' background used by all plot widgets. Order is X/Y/Z
+# (roll/pitch/yaw or N/E/Alt or u/v/w), consistent across every tab.
+_AXIS_COLORS     = ('#FF1744', '#00E676', '#00B0FF')   # red, green, blue
+_PLOT_LINE_WIDTH = 2
+
+
+# ═══════════════════════════════════════════════════════════
 #  Aircraft 3D model configuration
 # ═══════════════════════════════════════════════════════════
 #
@@ -40,7 +50,7 @@ pg.setConfigOptions(antialias=True, background='#1a1a1a', foreground='w')
 # many triangles the mesh has — because the rotation is applied as
 # a GPU model-matrix transform, not by re-uploading vertices.
 #
-_AIRCRAFT_STL_PATH    = os.path.join(os.path.dirname(__file__), '737.obj')
+_AIRCRAFT_STL_PATH    = os.path.join(os.path.dirname(__file__), '787.obj')
 _AIRCRAFT_TARGET_SIZE = 4.0          # span in GL units (axes are ~2.5)
 _AIRCRAFT_COLOR       = (0.78, 0.78, 0.85, 1.0)
 
@@ -68,7 +78,7 @@ _AIRCRAFT_AUTO_PALETTE = True
 # wrong on first launch, try one of the variants in _ORIENT_PRESETS
 # below or just edit the matrix entries directly (use 0, 1, -1 only).
 _AIRCRAFT_ORIENT = np.array([
-[0,0,1],[1,0,0],[0,-1,0]  # body +Z (down)        = STL -Y  (i.e. STL +Y is up)
+[0,0,-1],[1,0,0],[0,-1,0]  # body +Z (down)        = STL -Y  (i.e. STL +Y is up)
 ], dtype=np.float32)
 
 # Common alternates to try if the default looks wrong.
@@ -1057,15 +1067,15 @@ class FlightDataViewer(QWidget):
 
         t_max = self.history['times'][-1] if self.history is not None else 60.0
         labels = ['φ — Roll (°)', 'θ — Pitch (°)', 'ψ — Yaw (°)']
-        colors = ['#E53935', '#1E88E5', '#43A047']
 
         self.euler_plots  = []
         self.euler_curves = []
-        for j, (lbl, col) in enumerate(zip(labels, colors)):
+        for j, (lbl, col) in enumerate(zip(labels, _AXIS_COLORS)):
             pw = self._make_plot_widget(lbl, col, t_max,
                                          show_xaxis=(j == 2))
             self.euler_plots.append(pw)
-            self.euler_curves.append(pw.plot(pen=pg.mkPen(color=col, width=1)))
+            self.euler_curves.append(
+                pw.plot(pen=pg.mkPen(color=col, width=_PLOT_LINE_WIDTH)))
             layout.addWidget(pw)
 
         self._link_x_axes(self.euler_plots)
@@ -1080,15 +1090,15 @@ class FlightDataViewer(QWidget):
 
         t_max = self.history['times'][-1] if self.history is not None else 60.0
         labels = ['p — Roll rate (rad/s)', 'q — Pitch rate (rad/s)', 'r — Yaw rate (rad/s)']
-        colors = ['#E53935', '#1E88E5', '#43A047']
 
         self.rates_plots  = []
         self.rates_curves = []
-        for j, (lbl, col) in enumerate(zip(labels, colors)):
+        for j, (lbl, col) in enumerate(zip(labels, _AXIS_COLORS)):
             pw = self._make_plot_widget(lbl, col, t_max,
                                          show_xaxis=(j == 2))
             self.rates_plots.append(pw)
-            self.rates_curves.append(pw.plot(pen=pg.mkPen(color=col, width=1)))
+            self.rates_curves.append(
+                pw.plot(pen=pg.mkPen(color=col, width=_PLOT_LINE_WIDTH)))
             layout.addWidget(pw)
 
         self._link_x_axes(self.rates_plots)
@@ -1103,15 +1113,15 @@ class FlightDataViewer(QWidget):
 
         t_max = self.history['times'][-1] if self.history is not None else 60.0
         labels = ['uB — Forward (m/s)', 'vB — Lateral (m/s)', 'wB — Down (m/s)']
-        colors = ['#D32F2F', '#388E3C', '#1565C0']
 
         self.body_vel_plots  = []
         self.body_vel_curves = []
-        for j, (lbl, col) in enumerate(zip(labels, colors)):
+        for j, (lbl, col) in enumerate(zip(labels, _AXIS_COLORS)):
             pw = self._make_plot_widget(lbl, col, t_max,
                                          show_xaxis=(j == 2))
             self.body_vel_plots.append(pw)
-            self.body_vel_curves.append(pw.plot(pen=pg.mkPen(color=col, width=1)))
+            self.body_vel_curves.append(
+                pw.plot(pen=pg.mkPen(color=col, width=_PLOT_LINE_WIDTH)))
             layout.addWidget(pw)
 
         self._link_x_axes(self.body_vel_plots)
@@ -1126,15 +1136,15 @@ class FlightDataViewer(QWidget):
 
         t_max = self.history['times'][-1] if self.history is not None else 60.0
         labels = ['X — North (m)', 'Y — East (m)', 'h — Altitude (m)']
-        colors = ['#E53935', '#43A047', '#1E88E5']
 
         self.pos_plots  = []
         self.pos_curves = []
-        for j, (lbl, col) in enumerate(zip(labels, colors)):
+        for j, (lbl, col) in enumerate(zip(labels, _AXIS_COLORS)):
             pw = self._make_plot_widget(lbl, col, t_max,
                                          show_xaxis=(j == 2))
             self.pos_plots.append(pw)
-            self.pos_curves.append(pw.plot(pen=pg.mkPen(color=col, width=1)))
+            self.pos_curves.append(
+                pw.plot(pen=pg.mkPen(color=col, width=_PLOT_LINE_WIDTH)))
             layout.addWidget(pw)
 
         self._link_x_axes(self.pos_plots)
